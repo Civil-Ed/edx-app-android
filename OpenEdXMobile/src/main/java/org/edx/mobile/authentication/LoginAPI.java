@@ -1,5 +1,8 @@
 package org.edx.mobile.authentication;
 
+import static org.edx.mobile.http.util.CallUtil.executeStrict;
+import static java.net.HttpURLConnection.HTTP_BAD_REQUEST;
+
 import android.os.Bundle;
 
 import androidx.annotation.NonNull;
@@ -37,9 +40,6 @@ import javax.inject.Singleton;
 import okhttp3.ResponseBody;
 import retrofit2.Call;
 import retrofit2.Response;
-
-import static java.net.HttpURLConnection.HTTP_BAD_REQUEST;
-import static org.edx.mobile.http.util.CallUtil.executeStrict;
 
 @Singleton
 public class LoginAPI {
@@ -85,7 +85,7 @@ public class LoginAPI {
                                                  @NonNull String password) throws IOException {
         String clientID = config.getOAuthClientId();
         return loginService.getAccessToken(ApiConstants.GRANT_TYPE_PASSWORD, clientID, username,
-                password).execute();
+                password, ApiConstants.TOKEN_TYPE_JWT).execute();
     }
 
     @NonNull

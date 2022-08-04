@@ -44,7 +44,7 @@ public class ApiConstants {
 
     public static final String TOKEN_TYPE_REFRESH = "refresh_token";
 
-    public static final String TOKEN_TYPE_JWT = "jwt";
+    public static final String TOKEN_TYPE_JWT = "JWT";
 
     public static final String GRANT_TYPE_PASSWORD = "password";
 
