@@ -71,7 +71,9 @@ public class ApiTests extends HttpBaseTestCase {
     public void testGetLastAccessedModule() throws Exception {
         login();
 
-        EnrolledCoursesResponse e = executeStrict(courseAPI.getEnrolledCourses()).get(0);
+        EnrolledCoursesResponse e = executeStrict(courseAPI.getEnrolledCourses())
+                .getEnrollments()
+                .get(0);
 
         String courseId = e.getCourse().getId();
         assertNotNull(courseId);
@@ -100,9 +102,10 @@ public class ApiTests extends HttpBaseTestCase {
         login();
 
         // get a course id for this test
-        List<EnrolledCoursesResponse> courses = executeStrict(courseAPI.getEnrolledCourses());
+        List<EnrolledCoursesResponse> courses = executeStrict(courseAPI.getEnrolledCourses())
+                .getEnrollments();
         assertTrue("Must have enrolled to at least one course",
-                courses != null && courses.size() > 0);
+                courses.size() > 0);
         String handoutURL = courses.get(0).getCourse().getCourse_handouts();
 
         HandoutModel model = executeStrict(HandoutModel.class,
@@ -119,9 +122,10 @@ public class ApiTests extends HttpBaseTestCase {
         login();
 
         // get a course id for this test
-        List<EnrolledCoursesResponse> courses = executeStrict(courseAPI.getEnrolledCourses());
+        List<EnrolledCoursesResponse> courses = executeStrict(courseAPI.getEnrolledCourses())
+                .getEnrollments();
         assertTrue("Must have enrolled to at least one course",
-                courses != null && courses.size() > 0);
+                courses.size() > 0);
         String subscription_id = courses.get(0).getCourse().getSubscription_id();
         //should the channelId be mandatory?
         assertTrue(subscription_id != null);
@@ -140,9 +144,10 @@ public class ApiTests extends HttpBaseTestCase {
         login();
 
         // get a course id for this test
-        List<EnrolledCoursesResponse> courses = executeStrict(courseAPI.getEnrolledCourses());
+        List<EnrolledCoursesResponse> courses = executeStrict(courseAPI.getEnrolledCourses())
+                .getEnrollments();
         assertTrue("Must have enrolled to at least one course",
-                courses != null && courses.size() > 0);
+                courses.size() > 0);
         String updatesUrl = courses.get(0).getCourse().getCourse_updates();
 
         List<AnnouncementsModel> res = executeStrict(
@@ -166,7 +171,9 @@ public class ApiTests extends HttpBaseTestCase {
 
         print("test: Enroll in a course");
 
-        EnrolledCoursesResponse e = executeStrict(courseAPI.getEnrolledCourses()).get(0);
+        EnrolledCoursesResponse e = executeStrict(courseAPI.getEnrolledCourses())
+                .getEnrollments()
+                .get(0);
         String courseId = e.getCourse().getId();
         executeStrict(courseService.enrollInACourse(new CourseService.EnrollBody(courseId, true)));
         print("success");
@@ -211,7 +218,9 @@ public class ApiTests extends HttpBaseTestCase {
         login();
 
         // General overall testing of CourseComponent API without recursion
-        EnrolledCoursesResponse e = executeStrict(courseAPI.getEnrolledCourses()).get(0);
+        EnrolledCoursesResponse e = executeStrict(courseAPI.getEnrolledCourses())
+                .getEnrollments()
+                .get(0);
         final String courseId = e.getCourse().getId();
         final CourseStructureV1Model model = executeStrict(courseAPI.getCourseStructure(
                 config.getApiUrlVersionConfig().getBlocksApiVersion(), courseId));

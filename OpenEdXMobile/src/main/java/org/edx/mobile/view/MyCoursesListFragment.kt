@@ -14,7 +14,6 @@ import kotlinx.coroutines.launch
 import org.edx.mobile.R
 import org.edx.mobile.authentication.LoginAPI
 import org.edx.mobile.base.MainApplication
-import org.edx.mobile.course.CourseAPI
 import org.edx.mobile.databinding.FragmentMyCoursesListBinding
 import org.edx.mobile.databinding.PanelFindCourseBinding
 import org.edx.mobile.deeplink.DeepLink
@@ -27,6 +26,7 @@ import org.edx.mobile.event.NetworkConnectivityChangeEvent
 import org.edx.mobile.exception.AuthException
 import org.edx.mobile.exception.ErrorMessage
 import org.edx.mobile.extenstion.decodeToLong
+import org.edx.mobile.extenstion.setVisibility
 import org.edx.mobile.http.HttpStatus
 import org.edx.mobile.http.HttpStatusException
 import org.edx.mobile.http.notifications.FullScreenErrorNotification
@@ -34,23 +34,24 @@ import org.edx.mobile.http.notifications.SnackbarErrorNotification
 import org.edx.mobile.inapppurchases.BillingProcessor
 import org.edx.mobile.inapppurchases.BillingProcessor.BillingFlowListeners
 import org.edx.mobile.interfaces.RefreshListener
-import org.edx.mobile.logger.Logger
 import org.edx.mobile.model.api.EnrolledCoursesResponse
 import org.edx.mobile.model.course.EnrollmentMode
 import org.edx.mobile.module.analytics.Analytics
 import org.edx.mobile.module.analytics.InAppPurchasesAnalytics
-import org.edx.mobile.module.db.DataCallback
-import org.edx.mobile.util.*
+import org.edx.mobile.util.InAppPurchasesException
+import org.edx.mobile.util.InAppPurchasesUtils
+import org.edx.mobile.util.NetworkUtil
+import org.edx.mobile.util.NonNullObserver
+import org.edx.mobile.util.UiUtils
 import org.edx.mobile.view.adapters.MyCoursesAdapter
 import org.edx.mobile.view.dialog.AlertDialogFragment
 import org.edx.mobile.view.dialog.CourseModalDialogFragment
 import org.edx.mobile.view.dialog.FullscreenLoaderDialogFragment
+import org.edx.mobile.viewModel.CourseViewModel
+import org.edx.mobile.viewModel.CourseViewModel.CoursesRequestType.*
 import org.edx.mobile.viewModel.InAppPurchasesViewModel
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
-import retrofit2.Call
-import retrofit2.Callback
-import retrofit2.Response
 import java.util.*
 import javax.inject.Inject
 import kotlin.concurrent.schedule
@@ -59,17 +60,17 @@ import kotlin.concurrent.schedule
 class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
     private lateinit var adapter: MyCoursesAdapter
     private lateinit var binding: FragmentMyCoursesListBinding
-    private val logger = Logger(javaClass.simpleName)
+
     private var refreshOnResume = false
     private var refreshOnPurchase = false
+    private var isObserversInitialized = true
     private var lastClickTime: Long = 0
     private var incompletePurchases: List<Pair<String, String>> = emptyList()
 
     @Inject
-    lateinit var courseAPI: CourseAPI
-
-    @Inject
     lateinit var loginAPI: LoginAPI
+
+    private val courseViewModel: CourseViewModel by viewModels()
 
     private val iapViewModel: InAppPurchasesViewModel
             by viewModels(ownerProducer = { requireActivity() })
@@ -81,7 +82,6 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
     lateinit var iapUtils: InAppPurchasesUtils
 
     private lateinit var errorNotification: FullScreenErrorNotification
-    private lateinit var enrolledCoursesCall: Call<List<EnrolledCoursesResponse>>
     private lateinit var billingProcessor: BillingProcessor
     private var fullscreenLoader: FullscreenLoaderDialogFragment? = null
 
@@ -122,45 +122,30 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        binding =
-            DataBindingUtil.inflate(inflater, R.layout.fragment_my_courses_list, container, false)
+        binding = FragmentMyCoursesListBinding.inflate(inflater, container, false)
         errorNotification = FullScreenErrorNotification(binding.myCourseList)
+
         binding.swipeContainer.setOnRefreshListener {
             // Hide the progress bar as swipe layout has its own progress indicator
             binding.loadingIndicator.root.visibility = View.GONE
             errorNotification.hideError()
-            loadData(showProgress = false, fromCache = false)
+            courseViewModel.fetchEnrolledCourses(type = LIVE, showProgress = false)
         }
         UiUtils.setSwipeRefreshLayoutColors(binding.swipeContainer)
+
         // Add empty view to cause divider to render at the top of the list.
         binding.myCourseList.addHeaderView(View(context), null, false)
-        binding.myCourseList.adapter = adapter.also {
-            it.setValuePropEnabled(environment.remoteFeaturePrefs.isValuePropEnabled())
-        }
+        binding.myCourseList.adapter = adapter
         binding.myCourseList.onItemClickListener = adapter
-        initInAppPurchaseSetup()
+
+        initCourseObserver()
+
         return binding.root
     }
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-        ConfigUtil.checkValuePropEnabled(
-            environment.config,
-            object : ConfigUtil.OnValuePropStatusListener {
-                override fun isValuePropEnabled(isEnabled: Boolean) {
-                    if (isEnabled != environment.remoteFeaturePrefs.isValuePropEnabled()) {
-                        environment.remoteFeaturePrefs.setValuePropEnabled(isEnabled)
-                        adapter.setValuePropEnabled(isEnabled)
-                        adapter.notifyDataSetChanged()
-                        initInAppPurchaseSetup()
-                    }
-                }
-            })
-        loadData(showProgress = true, fromCache = true)
-    }
-
     private fun initInAppPurchaseSetup() {
-        if (isAdded && environment.remoteFeaturePrefs.isValuePropEnabled()) {
+        if (isAdded && isObserversInitialized) {
+            isObserversInitialized = false
             initFullscreenLoader()
             initObservers()
         }
@@ -189,8 +174,7 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
             NonNullObserver { refreshCourse ->
                 if (refreshCourse) {
                     refreshOnPurchase = true
-                    enrolledCoursesCall = courseAPI.enrolledCoursesWithoutStale
-                    getUserEnrolledCourses(false)
+                    courseViewModel.fetchEnrolledCourses(type = STALE, showProgress = false)
                     iapViewModel.refreshCourseData(false)
                 }
             })
@@ -256,6 +240,66 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
         )
     }
 
+    private fun initCourseObserver() {
+        courseViewModel.showProgress.observe(viewLifecycleOwner, NonNullObserver {
+            binding.loadingIndicator.root.setVisibility(it)
+            if (it) errorNotification.hideError()
+        })
+
+        courseViewModel.enrolledCoursesResponse.observe(viewLifecycleOwner, NonNullObserver {
+            if (environment.remoteFeaturePrefs.isValuePropEnabled()) {
+                initInAppPurchaseSetup()
+            }
+
+            populateCourseData(data = it)
+            resetPurchase()
+            if (incompletePurchases.isEmpty()) {
+                detectUnfulfilledPurchase(getVerifiedCoursesSku(it))
+            }
+        })
+
+        courseViewModel.handleError.observe(viewLifecycleOwner, NonNullObserver {
+            when (it) {
+                is HttpStatusException -> when (it.statusCode) {
+                    HttpStatus.UNAUTHORIZED -> {
+                        context?.let { context ->
+                            environment.router?.forceLogout(
+                                context,
+                                environment.analyticsRegistry,
+                                environment.notificationDelegate
+                            )
+                        }
+                    }
+                    HttpStatus.UPGRADE_REQUIRED -> {
+                        context?.let { context ->
+                            errorNotification.showError(
+                                context,
+                                it
+                            )
+                        }
+                    }
+                }
+                is AuthException -> {
+                    context?.let { context ->
+                        environment.router?.forceLogout(
+                            context,
+                            environment.analyticsRegistry,
+                            environment.notificationDelegate
+                        )
+                    }
+                }
+                else -> {
+                    if (fullscreenLoader?.isAdded == true) iapViewModel.setError(
+                        ErrorMessage.COURSE_REFRESH_CODE,
+                        it
+                    )
+                    else if (adapter.isEmpty) showError(it)
+                }
+            }
+            invalidateView()
+        })
+    }
+
     private fun showNewExperienceAlertDialog() {
         AlertDialogFragment.newInstance(
             getString(R.string.silent_course_upgrade_success_title),
@@ -274,45 +318,19 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
         ).show(childFragmentManager, null)
     }
 
-    private val dataCallback: DataCallback<Int> = object : DataCallback<Int>() {
-        override fun onResult(result: Int) {}
-        override fun onFail(ex: Exception) {
-            logger.error(ex)
-        }
-    }
-
     override fun onResume() {
         super.onResume()
         if (refreshOnResume) {
-            loadData(showProgress = false, fromCache = true)
+            courseViewModel.fetchEnrolledCourses(type = CACHE, showProgress = false)
             refreshOnResume = false
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        enrolledCoursesCall?.cancel()
-        EventBus.getDefault().unregister(this)
-    }
-
-    @Subscribe(sticky = true)
-    fun onEventMainThread(event: EnrolledInCourseEvent?) {
-        refreshOnResume = true
-    }
-
-    /**
-     * Method to obtain enrolled courses data from api or cache
-     * @param showProgress: show loading indicator if true, false else wise
-     * @param fromCache: make cached api call if true, server api call else wise
-     */
-    private fun loadData(showProgress: Boolean, fromCache: Boolean) {
-        if (showProgress) {
-            binding.loadingIndicator.root.visibility = View.VISIBLE
-            errorNotification.hideError()
+    override fun onRevisit() {
+        super.onRevisit()
+        if (NetworkUtil.isConnected(activity)) {
+            binding.swipeContainer.isEnabled = true
         }
-        enrolledCoursesCall =
-            if (fromCache) courseAPI.enrolledCoursesFromCache else courseAPI.enrolledCourses
-        getUserEnrolledCourses(fromCache)
     }
 
     private fun detectUnfulfilledPurchase(verifiedCoursesSku: List<String>?) {
@@ -366,89 +384,13 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
         incompletePurchases = incompletePurchases.drop(1)
     }
 
-    private fun getUserEnrolledCourses(fromCache: Boolean = false) {
-        enrolledCoursesCall.enqueue(object : Callback<List<EnrolledCoursesResponse>> {
-            override fun onResponse(
-                call: Call<List<EnrolledCoursesResponse>>,
-                response: Response<List<EnrolledCoursesResponse>>
-            ) {
-                if (response.isSuccessful && response.code() == HttpStatus.OK) {
-                    populateCourseData(ArrayList(response.body()), isCachedData = fromCache)
-                    // Fetch latest data from server in the background after displaying previously cached data
-                    // Show loader if the cache data is empty
-                    if (fromCache) {
-                        loadData(
-                            showProgress = response.body()?.isEmpty() == true,
-                            fromCache = false
-                        )
-                    } else {
-                        resetPurchase()
-                        if (incompletePurchases.isEmpty()) {
-                            detectUnfulfilledPurchase(getVerifiedCoursesSku(response.body()))
-                        }
-                    }
-                } else if (fromCache) { // Fetch latest data from server if cache call's response is unSuccessful
-                    loadData(showProgress = true, fromCache = false)
-                } else {
-                    when {
-                        response.code() == HttpStatus.UNAUTHORIZED && context != null -> {
-                            environment.router?.forceLogout(
-                                context,
-                                environment.analyticsRegistry,
-                                environment.notificationDelegate
-                            )
-                        }
-                        response.code() == HttpStatus.UPGRADE_REQUIRED -> {
-                            context?.let { context ->
-                                errorNotification.showError(
-                                    context,
-                                    HttpStatusException(response.code(), "")
-                                )
-                            }
-                        }
-                        adapter.isEmpty -> {
-                            showError(HttpStatusException(response.code(), response.message()))
-                        }
-                    }
-                    invalidateView()
-                }
-            }
-
-            override fun onFailure(call: Call<List<EnrolledCoursesResponse>>, t: Throwable) {
-                when {
-                    call.isCanceled -> logger.error(t)
-                    fromCache -> loadData(showProgress = true, fromCache = false)
-                    (fullscreenLoader?.isAdded == true) -> iapViewModel.setError(
-                        ErrorMessage.COURSE_REFRESH_CODE,
-                        t
-                    )
-                    else -> {
-                        if (t is AuthException || (t is HttpStatusException && t.statusCode == HttpStatus.UNAUTHORIZED)) {
-                            environment.router?.forceLogout(
-                                context,
-                                environment.analyticsRegistry,
-                                environment.notificationDelegate
-                            )
-                        } else if (adapter.isEmpty) {
-                            showError(t)
-                            invalidateView()
-                        }
-                    }
-                }
-            }
-        })
-    }
-
     private fun populateCourseData(
-        data: ArrayList<EnrolledCoursesResponse>,
-        isCachedData: Boolean = false
+        data: List<EnrolledCoursesResponse>
     ) {
-        if (isCachedData.not()) {
-            updateDatabaseAfterDownload(data)
-        }
-        if (data.size > 0) {
+        if (data.isNotEmpty()) {
             adapter.setItems(data)
         }
+        adapter.setValuePropEnabled(environment.remoteFeaturePrefs.isValuePropEnabled())
         addFindCoursesFooter()
         adapter.notifyDataSetChanged()
         if (adapter.isEmpty && !environment.config.discoveryConfig.isDiscoveryEnabled) {
@@ -476,10 +418,10 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
     /**
      * To get verified courses SKUs from enrolled courses response.
      */
-    private fun getVerifiedCoursesSku(response: List<EnrolledCoursesResponse>?): List<String>? {
-        return response?.filter {
+    private fun getVerifiedCoursesSku(response: List<EnrolledCoursesResponse>): List<String> {
+        return response.filter {
             EnrollmentMode.VERIFIED.toString().equals(it.mode, true)
-        }?.map { it.courseSku }?.toList()
+        }.mapNotNull { it.courseSku }.toList()
     }
 
     private fun resetPurchase() {
@@ -507,28 +449,6 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
         }
     }
 
-    private fun updateDatabaseAfterDownload(list: ArrayList<EnrolledCoursesResponse>?) {
-        if (list != null && list.size > 0) {
-            //update all videos in the DB as Deactivated
-            environment.database?.updateAllVideosAsDeactivated(dataCallback)
-            for (i in list.indices) {
-                //Check if the flag of isIs_active is marked to true,
-                //then activate all videos
-                if (list[i].isActive) {
-                    //update all videos for a course fetched in the API as Activated
-                    environment.database?.updateVideosActivatedForCourse(
-                        list[i].course.id,
-                        dataCallback
-                    )
-                } else {
-                    list.removeAt(i)
-                }
-            }
-            //Delete all videos which are marked as Deactivated in the database
-            environment.storage?.deleteAllUnenrolledVideos()
-        }
-    }
-
     private fun invalidateView() {
         binding.swipeContainer.isRefreshing = false
         binding.loadingIndicator.root.visibility = View.GONE
@@ -540,11 +460,9 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
 
     private fun showError(error: Throwable) {
         context?.let { context ->
-            error.cause?.let { cause ->
-                errorNotification.showError(context, cause, R.string.lbl_reload) {
-                    if (NetworkUtil.isConnected(context)) {
-                        onRefresh()
-                    }
+            errorNotification.showError(context, error, R.string.lbl_reload) {
+                if (NetworkUtil.isConnected(context)) {
+                    onRefresh()
                 }
             }
         }
@@ -576,15 +494,13 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
     }
 
     @Subscribe(sticky = true)
-    fun onEvent(event: MainDashboardRefreshEvent?) {
-        loadData(showProgress = true, fromCache = false)
+    fun onEventMainThread(event: EnrolledInCourseEvent?) {
+        refreshOnResume = true
     }
 
-    override fun onRevisit() {
-        super.onRevisit()
-        if (NetworkUtil.isConnected(activity)) {
-            binding.swipeContainer.isEnabled = true
-        }
+    @Subscribe(sticky = true)
+    fun onEvent(event: MainDashboardRefreshEvent?) {
+        courseViewModel.fetchEnrolledCourses(type = LIVE)
     }
 
     @Subscribe(sticky = true)
@@ -603,5 +519,10 @@ class MyCoursesListFragment : OfflineSupportBaseFragment(), RefreshListener {
 
     override fun isShowingFullScreenError(): Boolean {
         return errorNotification.isShowing
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        EventBus.getDefault().unregister(this)
     }
 }

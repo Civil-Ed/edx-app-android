@@ -7,13 +7,13 @@ import okhttp3.OkHttpClient
 import org.edx.mobile.base.http.SynchronousExecutorService
 import org.edx.mobile.http.interceptor.OnlyIfCachedStrippingInterceptor
 import org.edx.mobile.http.provider.RetrofitProvider
+import org.edx.mobile.model.api.EnrollmentResponse
 import org.edx.mobile.model.course.BlockData
 import org.edx.mobile.model.course.BlockList
 import org.edx.mobile.model.course.BlockType
 import org.edx.mobile.util.Config
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
-
 
 class Injector(config: Config) {
 
@@ -39,7 +39,7 @@ class Injector(config: Config) {
     fun getRetrofitProvider(): RetrofitProvider {
         return object : RetrofitProvider {
             override fun get(): Retrofit {
-                return retrofit;
+                return retrofit
             }
 
             override fun getWithOfflineCache(): Retrofit {
@@ -63,6 +63,10 @@ class Injector(config: Config) {
             BlockList.Deserializer()
         ).registerTypeAdapter(BlockType::class.java, BlockType.Deserializer())
             .registerTypeAdapter(BlockData::class.java, BlockData.Deserializer())
+            .registerTypeAdapter(
+                EnrollmentResponse::class.java,
+                EnrollmentResponse.EnrollmentDeserializer()
+            )
             .create()
     }
 }
